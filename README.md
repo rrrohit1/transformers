@@ -1,68 +1,56 @@
+# Transformers & CUDA Projects
 
-# CUDA starter — notebook summary
+## CUDA Starter Notebook
 
-This repository contains a hands-on Jupyter notebook: `notebooks/cuda-starter.ipynb`. The notebook demonstrates writing, compiling, and running CUDA kernels from Python using PyTorch's C++/CUDA extension utilities. The goal is to show how algorithm implementations evolve from easy-to-read Python versions to high-performance CUDA kernels.
+A hands-on exploration of CUDA programming with PyTorch:
 
-## Overview
+- Progressive implementations: pure Python → simulated kernels → inline C++/CUDA kernels
+- Worked examples: RGB → grayscale conversion and matrix multiplication
+- Core concepts: thread/block mapping, launch configs, memory management
 
-- Progressive implementations: pure Python -> simulated kernels/blocks in Python -> inline C++/CUDA kernels loaded with `torch.utils.cpp_extension`.
-- Worked examples: RGB→grayscale image conversion and matrix multiplication (matmul).
-- Emphasis on mapping work to GPU threads/blocks and validating correctness vs. PyTorch's built-ins.
+## Flash Attention Explained
 
-## What I learned (concise)
+FlashAttention is a faster way to compute attention in Transformer models. It dramatically reduces memory use and improves speed by processing attention in small blocks that fit in fast GPU memory.
 
-- How to set up and use a CUDA-enabled PyTorch environment and load images with `torchvision`.
-- How kernels map to threads and blocks (1D, 2D indexing), and the limits to consider (max threads, block dims).
-- How to write inline CUDA C++ kernels, compile them at runtime, and call them from Python.
-- Basic debugging and safety patterns: input/contiguity checks, `C10_CUDA_KERNEL_LAUNCH_CHECK()`, and `CUDA_LAUNCH_BLOCKING=1` for deterministic failures.
-- Performance trade-offs between pure Python implementations and CUDA kernels; how to validate correctness using `torch.isclose` and CPU/PyTorch comparisons.
+### The Standard Attention Formula
 
-## Notebook highlights (selected snippets)
+Normally, attention is computed as:
 
-- RGB → Grayscale
-  - `rgb2grey_py`: Python flatten-based conversion for clarity.
-  - `rgb2grey_pyk` / `rgb2grey_pybk`: Python-simulated kernels illustrating single-thread and block behavior.
-  - `rgb_to_grayscale` (CUDA): inline C++/CUDA kernel with 1D and later 2D grid/block indexing.
+$$
+\text{Attention}(Q,K,V) = \text{Softmax}\left(\frac{QK^T}{\sqrt{d}}\right)V
+$$
 
-- Matrix multiplication (matmul)
-  - Naive triple-loop Python matmul for clarity and correctness checks.
-  - 2D block-simulated kernel and a simple CUDA kernel using `dim3` blocks and thread-per-block configurations.
-  - Direct comparisons to `m1 @ m2` (PyTorch) for correctness and timing.
+### The Problem
 
-## How to run locally (notes)
+For sequence length $N$:
 
-1. Ensure you have a CUDA-capable GPU and matching CUDA toolkit installed.
-2. Create a Python environment and install dependencies (example):
+- The attention score matrix $QK^T$ is $N \times N$
+- With long sequences (4k, 16k tokens), this becomes huge
+- Results in high memory usage and computation time
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install torch torchvision matplotlib notebook
-```
+### The Key Trick
 
-3. Launch the notebook:
+Instead of building the full $N \times N$ score matrix, FlashAttention:
 
-```bash
-jupyter notebook notebooks/cuda-starter.ipynb
-```
+1. **Splits into Blocks**: Divides data into tiles that fit in GPU SRAM
+2. **Streams Processing**: Computes block-by-block with on-the-fly softmax
+3. **Saves Memory**: Never stores the full attention matrix
+4. **Maintains Accuracy**: Unlike approximations (e.g., Linformer), results match standard attention
 
-4. Runtime tips:
+### Why Is It Faster?
 
-- Set `CUDA_LAUNCH_BLOCKING=1` in the environment (or run the notebook cell that sets it) while developing to make errors deterministic.
-- Make tensors contiguous and move them to GPU with `.contiguous().cuda()` before passing to CUDA kernels.
-- When editing CUDA/C++ code in the notebook, the inline loader recompiles; watch the verbose output for compile/link errors.
+Modern GPU bottlenecks:
 
-## Next steps & ideas
+- Moving data between HBM (slow) and SRAM (fast) is expensive
+- FlashAttention trades some recomputation for much less memory traffic
+- IO-aware design: optimized for memory hierarchy, not just compute ops
 
-- Implement shared-memory tiled matmul to reduce global memory traffic and improve performance.
-- Profile with Nsight Systems / Nsight Compute or `torch.cuda.profiler` to locate bottlenecks.
-- Explore mixed-precision and tensor cores on recent NVIDIA GPUs for faster matmuls.
-- Add more image-processing kernels (convolution, reduction operations) and compare to cuDNN/cuBLAS where relevant.
+### Benefits
 
-## References
+- **Memory Efficient**: Much lower memory use enables longer sequences
+- **Faster**: 2–4× speedup on A100/H100 GPUs
+- **Exact**: Same results as standard attention
 
-1. [Visualizing attention (original repo topic)](https://jalammar.github.io/visualizing-neural-machine-translation-mechanics-of-seq2seq-models-with-attention/)
-2. CUDA / lecture reference used in the notebook: "Getting Started With CUDA for Python Programmers" (lecture referenced in the notebook).
+### In Simple Words
 
-
+Think of FlashAttention as computing attention in small "flashes" (tiles) inside the GPU's fast memory. Instead of storing one huge attention matrix, it works with small pieces that fit in fast memory, trading a bit of recomputation for much less slow memory access.
